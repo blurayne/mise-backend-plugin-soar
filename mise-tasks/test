@@ -1,42 +1,59 @@
 #!/usr/bin/env bash
-#MISE description="Run backend plugin tests - test plugin linking and basic functionality"
+#MISE description="Run soar backend plugin tests"
 set -euo pipefail
 
-# Link the plugin for testing
-mise plugin link --force <BACKEND> .
+BACKEND="soar"
+# jq is a widely available tool in the soar registry — good for a smoke test
+TEST_TOOL="jq"
 
-# Clear cache to ensure fresh testing
+# Link the local plugin for development testing
+mise plugin link --force "${BACKEND}" .
+
+# Clear cache to ensure fresh results
 mise cache clear
 
-# Test that the plugin can list tools (this should work even if no tools are available)
-echo "Testing plugin linking and basic functionality..."
+echo "=== soar backend plugin tests ==="
+echo
 
-# Try to list available versions for a test tool
-# Note: This will likely fail until you implement the backend methods
-# Replace <TEST_TOOL> with a real tool name your backend supports
-TEST_TOOL="<TEST_TOOL>"
+# 1. Verify soar is available
+echo "Checking that soar is installed..."
+if ! command -v soar &>/dev/null; then
+    echo "ERROR: soar is not installed."
+    echo "  Install via: mise use -g github:pkgforge/soar"
+    echo "  Or via:      curl -fsSL \"https://raw.githubusercontent.com/pkgforge/soar/main/install.sh\" | sh"
+    exit 1
+fi
+echo "✓ soar found at $(command -v soar)"
+echo
 
+# 2. List versions
 echo "Testing version listing for ${TEST_TOOL}..."
-if mise ls-remote <BACKEND>:${TEST_TOOL} 2>/dev/null; then
+if mise ls-remote "${BACKEND}:${TEST_TOOL}"; then
     echo "✓ Version listing works"
 else
-    echo "⚠ Version listing failed - implement backend_list_versions.lua for your backend"
+    echo "✗ Version listing failed"
+    exit 1
 fi
+echo
 
-# Test installation if versions are available
-echo "Testing installation..."
-if mise install <BACKEND>:${TEST_TOOL}@latest 2>/dev/null; then
+# 3. Install
+echo "Testing installation of ${TEST_TOOL}@latest..."
+if mise install "${BACKEND}:${TEST_TOOL}@latest"; then
     echo "✓ Installation works"
-    
-    # Test that the tool can be executed
-    if mise exec <BACKEND>:${TEST_TOOL}@latest -- ${TEST_TOOL} --version 2>/dev/null; then
-        echo "✓ Tool execution works"
-    else
-        echo "⚠ Tool execution failed - check backend_exec_env.lua implementation"
-    fi
 else
-    echo "⚠ Installation failed - implement backend_install.lua for your backend"
+    echo "✗ Installation failed"
+    exit 1
 fi
+echo
 
-echo "✓ Basic plugin structure tests completed"
-echo "Note: Replace <TEST_TOOL> with a real tool and implement the backend methods"
+# 4. Execute the installed tool
+echo "Testing execution of ${TEST_TOOL}..."
+if mise exec "${BACKEND}:${TEST_TOOL}@latest" -- "${TEST_TOOL}" --version; then
+    echo "✓ Tool execution works"
+else
+    echo "✗ Tool execution failed"
+    exit 1
+fi
+echo
+
+echo "=== All tests passed ==="

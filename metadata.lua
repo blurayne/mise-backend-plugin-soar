@@ -3,27 +3,15 @@
 -- Documentation: https://mise.jdx.dev/backend-plugin-development.html
 
 PLUGIN = { -- luacheck: ignore
-    -- Required: Plugin name (will be the backend name users reference)
-    name = "<BACKEND>",
-
-    -- Required: Plugin version (not the tool versions)
+    name = "soar",
     version = "1.0.0",
-
-    -- Required: Brief description of the backend and tools it manages
-    description = "A mise backend plugin for <BACKEND> tools",
-
-    -- Required: Plugin author/maintainer
-    author = "<GITHUB_USER>",
-
-    -- Optional: Plugin homepage/repository URL
-    homepage = "https://github.com/<GITHUB_USER>/<BACKEND>",
-
-    -- Optional: Plugin license
+    description = "A mise backend plugin for soar (pkgforge) — install static binaries and AppImages on Linux",
+    author = "Markus Geiger",
+    homepage = "https://github.com/blurayne/mise-backend-plugin-soar",
     license = "MIT",
-
-    -- Optional: Important notes for users
     notes = {
-        -- "Requires <BACKEND> to be installed on your system",
-        -- "This plugin manages tools from the <BACKEND> ecosystem"
+        "Requires soar to be installed on your system: https://soar.qaidvoid.dev/",
+        "Only supports Linux — soar is a Linux-only package manager",
+        "Packages are sourced from the soarpkgs repository: https://github.com/pkgforge/soarpkgs",
     },
 }

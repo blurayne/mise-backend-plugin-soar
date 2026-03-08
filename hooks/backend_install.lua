@@ -1,13 +1,16 @@
---- Installs a specific version of a tool
+--- Installs a specific package version via soar.
 --- Documentation: https://mise.jdx.dev/backend-plugin-development.html#backendinstall
---- @param ctx {tool: string, version: string, install_path: string} Context
---- @return table Empty table on success
+--- @param ctx BackendInstallCtx Context (tool, version, install_path)
+--- @return BackendInstallResult Empty table on success
 function PLUGIN:BackendInstall(ctx)
+    if RUNTIME.osType ~= "Linux" then
+        error("soar backend only supports Linux (current OS: " .. RUNTIME.osType .. ")")
+    end
+
     local tool = ctx.tool
     local version = ctx.version
     local install_path = ctx.install_path
 
-    -- Validate inputs
     if not tool or tool == "" then
         error("Tool name cannot be empty")
     end
@@ -18,86 +21,70 @@ function PLUGIN:BackendInstall(ctx)
         error("Install path cannot be empty")
     end
 
-    -- Create installation directory
     local cmd = require("cmd")
-    cmd.exec("mkdir -p " .. install_path)
+    local file = require("file")
+    local log = require("log")
 
-    -- Example implementations (choose/modify based on your backend):
-
-    -- Example 1: Package manager installation (like npm, pip)
-    local install_cmd = "<BACKEND> install " .. tool .. "@" .. version .. " --target " .. install_path
-    local result = cmd.exec(install_cmd)
-
-    if result:match("error") or result:match("failed") then
-        error("Failed to install " .. tool .. "@" .. version .. ": " .. result)
+    -- Verify soar is available before proceeding.
+    local ok_which, which_out = pcall(cmd.exec, "which soar")
+    if not ok_which or which_out:match("^%s*$") then
+        error(
+            "soar is not installed or not on PATH.\n\n"
+                .. "Install soar with one of:\n"
+                .. "  mise use -g github:pkgforge/soar\n"
+                .. "  curl -fsSL \"https://raw.githubusercontent.com/pkgforge/soar/main/install.sh\" | sh"
+        )
     end
 
-    -- Example 2: Download and extract from URL
-    --[[
-    local http = require("http")
-    local file = require("file")
+    local bin_path = file.join_path(install_path, "bin")
 
-    -- Construct download URL (adjust based on your backend's URL pattern)
-    local platform = RUNTIME.osType:lower()
-    local arch = RUNTIME.archType
-    local download_url = "https://releases.<BACKEND>.org/" .. tool .. "/" .. version .. "/" .. tool .. "-" .. platform .. "-" .. arch .. ".tar.gz"
+    -- Create the bin directory so soar has a target to write into.
+    cmd.exec("mkdir -p " .. bin_path)
 
-    -- Download the tool
-    local temp_file = install_path .. "/" .. tool .. ".tar.gz"
-    local resp, err = http.download({
-        url = download_url,
-        output = temp_file
+    -- Build the package spec.  soar's registry install supports <pkg>@<version>.
+    -- We always pass the version so mise version-pinning is honoured where possible.
+    -- If soar does not recognise the @<version> syntax it will install its latest.
+    local pkg_spec = tool .. "@" .. version
+
+    log.info("Installing " .. pkg_spec .. " via soar → " .. bin_path)
+
+    -- Key flags:
+    --   --yes           skip interactive prompts (pick first variant)
+    --   --binary-only   install only the executable (no desktop files, logs, etc.)
+    -- SOAR_BIN redirects the binary into mise's install directory instead of
+    -- the global soar bin dir (~/.local/share/soar/bin).
+    local ok_install, result = pcall(cmd.exec, "soar install --yes --binary-only " .. pkg_spec, {
+        env = { SOAR_BIN = bin_path },
     })
 
-    if err then
-        error("Failed to download " .. tool .. "@" .. version .. ": " .. err)
+    if not ok_install then
+        -- soar 0.x sometimes errors on @<version> for registry pkgs; retry without it.
+        log.warn("Install with version spec failed, retrying without version: " .. tostring(result))
+        local ok_retry, retry_result = pcall(cmd.exec, "soar install --yes --binary-only " .. tool, {
+            env = { SOAR_BIN = bin_path },
+        })
+        if not ok_retry then
+            error(
+                "Failed to install '"
+                    .. tool
+                    .. "' via soar: "
+                    .. tostring(retry_result)
+                    .. "\n\nTry running manually: soar install "
+                    .. tool
+            )
+        end
     end
 
-    -- Extract the archive
-    cmd.exec("cd " .. install_path .. " && tar -xzf " .. temp_file)
-    cmd.exec("rm " .. temp_file)
-
-    -- Set executable permissions
-    cmd.exec("chmod +x " .. install_path .. "/bin/" .. tool)
-    --]]
-
-    -- Example 3: Build from source
-    --[[
-    local git_url = "https://github.com/owner/" .. tool .. ".git"
-
-    -- Clone the repository
-    cmd.exec("git clone " .. git_url .. " " .. install_path .. "/src")
-    cmd.exec("cd " .. install_path .. "/src && git checkout " .. version)
-
-    -- Build the tool (adjust based on build system)
-    local build_result = cmd.exec("cd " .. install_path .. "/src && make install PREFIX=" .. install_path)
-
-    if build_result:match("error") then
-        error("Failed to build " .. tool .. "@" .. version)
+    -- Sanity check: at least one executable should now exist in bin_path.
+    local ok_ls, ls_out = pcall(cmd.exec, "ls " .. bin_path)
+    if not ok_ls or ls_out:match("^%s*$") then
+        error(
+            "Installation appeared to succeed but no files were found in "
+                .. bin_path
+                .. ".\n\nCheck soar output above for errors."
+        )
     end
 
-    -- Clean up source
-    cmd.exec("rm -rf " .. install_path .. "/src")
-    --]]
-
-    -- Platform-specific installation logic
-    --[[
-    if RUNTIME.osType == "Darwin" then
-        -- macOS-specific installation
-        local macos_cmd = "<BACKEND> install-macos " .. tool .. "@" .. version .. " " .. install_path
-        cmd.exec(macos_cmd)
-    elseif RUNTIME.osType == "Linux" then
-        -- Linux-specific installation
-        local linux_cmd = "<BACKEND> install-linux " .. tool .. "@" .. version .. " " .. install_path
-        cmd.exec(linux_cmd)
-    elseif RUNTIME.osType == "Windows" then
-        -- Windows-specific installation
-        local windows_cmd = "<BACKEND> install-windows " .. tool .. "@" .. version .. " " .. install_path
-        cmd.exec(windows_cmd)
-    else
-        error("Unsupported platform: " .. RUNTIME.osType)
-    end
-    --]]
-
+    log.debug("Installed files: " .. ls_out)
     return {}
 end

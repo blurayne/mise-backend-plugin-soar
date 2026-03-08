@@ -8,14 +8,32 @@ on:
   workflow_dispatch:
 
 jobs:
-  ci:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+  lint:
+    # Linting is OS-independent; run on ubuntu for speed
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: jdx/mise-action@v2
-      - run: mise run ci
+      - run: mise run lint
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  test:
+    # soar is Linux-only, so tests only run on Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+
+      - name: Install soar
+        run: |
+          curl -fsSL "https://raw.githubusercontent.com/pkgforge/soar/main/install.sh" | sh
+          echo "$HOME/.local/share/soar/bin" >> "$GITHUB_PATH"
+
+      - name: Sync soar registry
+        run: soar sync
+
+      - name: Run plugin tests
+        run: mise run test
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
