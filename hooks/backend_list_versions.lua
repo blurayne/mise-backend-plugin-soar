@@ -3,7 +3,7 @@
 --- @param ctx BackendListVersionsCtx Context (tool = the tool name requested)
 --- @return BackendListVersionsResult Table containing list of available versions
 function PLUGIN:BackendListVersions(ctx)
-    if RUNTIME.osType ~= "Linux" then
+    if RUNTIME.osType ~= "linux" then
         error("soar backend only supports Linux (current OS: " .. RUNTIME.osType .. ")")
     end
 
@@ -18,7 +18,7 @@ function PLUGIN:BackendListVersions(ctx)
 
     -- Verify soar is available before proceeding.
     local ok_which, which_out = pcall(cmd.exec, "which soar")
-    if not ok_which or which_out:match("^%s*$") then
+    if not ok_which or (which_out and which_out:match("^%s*$")) then
         error(
             "soar is not installed or not on PATH.\n\n"
                 .. "Install soar with one of:\n"
@@ -27,10 +27,15 @@ function PLUGIN:BackendListVersions(ctx)
         )
     end
 
-    -- soar --json query returns a JSON array of matching packages.
-    -- We filter for exact name matches and collect unique versions.
-    log.debug("Querying soar registry for: " .. tool)
-    local ok, raw = pcall(cmd.exec, "soar --json query " .. tool)
+    -- Sync registry metadata before searching.
+    log.debug("Syncing soar registry")
+    pcall(cmd.exec, "soar sync")
+
+    -- soar --json search outputs NDJSON: one JSON object per line.
+    -- Each package result line contains pkg_name, version, etc.
+    -- The final line is a summary object without pkg_name.
+    log.debug("Searching soar registry for: " .. tool)
+    local ok, raw = pcall(cmd.exec, "soar --json search " .. tool)
     if not ok then
         error(
             "Failed to run soar: "
@@ -39,34 +44,23 @@ function PLUGIN:BackendListVersions(ctx)
         )
     end
 
-    local raw_trimmed = raw:match("^%s*(.-)%s*$")
-    if raw_trimmed == "" or raw_trimmed == "null" or raw_trimmed == "[]" then
-        error("No packages found for '" .. tool .. "' in the soar registry")
-    end
-
-    local ok2, data = pcall(json.decode, raw_trimmed)
-    if not ok2 then
-        error("Failed to parse soar query output: " .. tostring(data) .. "\nRaw output: " .. raw_trimmed)
-    end
-
-    -- Normalise: soar may return an array or a single object
+    -- Parse NDJSON: collect entries that have pkg_name (skip summary lines).
     local entries = {}
-    if type(data) == "table" then
-        if data[1] ~= nil then
-            entries = data
-        else
-            entries = { data }
+    if raw and raw ~= "" then
+        for line in raw:gmatch("[^\n]+") do
+            local line_trimmed = line:match("^%s*(.-)%s*$")
+            if line_trimmed ~= "" then
+                local ok2, obj = pcall(json.decode, line_trimmed)
+                if ok2 and type(obj) == "table" and obj.pkg_name then
+                    table.insert(entries, obj)
+                end
+            end
         end
     end
 
-    if #entries == 0 then
-        error("No packages found for '" .. tool .. "' in the soar registry")
-    end
-
     -- Helper: extract the package name from a result entry.
-    -- soar uses several field names depending on the registry format.
     local function pkg_name(entry)
-        return (entry.pkg or entry.pkg_name or entry.name or ""):lower()
+        return (entry.pkg_name or entry.pkg or entry.name or ""):lower()
     end
 
     -- Collect unique versions from entries that match the requested tool name.
@@ -88,8 +82,7 @@ function PLUGIN:BackendListVersions(ctx)
     end
 
     -- Second pass: if no exact match found, accept any result.
-    -- (The tool might be referred to by a variant name or pkg_id.)
-    if #versions == 0 then
+    if #versions == 0 and #entries > 0 then
         log.debug("No exact match for '" .. tool .. "'; falling back to all results")
         for _, entry in ipairs(entries) do
             add_version(entry.version)
@@ -98,10 +91,13 @@ function PLUGIN:BackendListVersions(ctx)
 
     if #versions == 0 then
         error(
-            "No version information found for '"
+            "No packages found for '"
                 .. tool
-                .. "'.\n\n"
-                .. "Verify the package exists: soar query "
+                .. "' in the soar registry.\n\n"
+                .. "Search for available packages:\n"
+                .. "  https://pkgs.pkgforge.dev/?search="
+                .. tool
+                .. "\n  soar search "
                 .. tool
         )
     end

@@ -3,7 +3,7 @@
 --- @param ctx BackendInstallCtx Context (tool, version, install_path)
 --- @return BackendInstallResult Empty table on success
 function PLUGIN:BackendInstall(ctx)
-    if RUNTIME.osType ~= "Linux" then
+    if RUNTIME.osType ~= "linux" then
         error("soar backend only supports Linux (current OS: " .. RUNTIME.osType .. ")")
     end
 
@@ -23,6 +23,7 @@ function PLUGIN:BackendInstall(ctx)
 
     local cmd = require("cmd")
     local file = require("file")
+    local json = require("json")
     local log = require("log")
 
     -- Verify soar is available before proceeding.
@@ -47,6 +48,28 @@ function PLUGIN:BackendInstall(ctx)
     local pkg_spec = tool .. "@" .. version
 
     log.info("Installing " .. pkg_spec .. " via soar → " .. bin_path)
+
+    -- soar skips installation when the package is already registered in its DB,
+    -- even if the binary was later deleted (e.g. after a failed mise install cleanup).
+    -- Detect this stale registration and remove it so soar installs fresh to SOAR_BIN.
+    local ok_q, query_raw = pcall(cmd.exec, "soar --json query " .. tool)
+    if ok_q and query_raw and query_raw ~= "" then
+        local registered = false
+        for line in query_raw:gmatch("[^\n]+") do
+            local ok_j, obj = pcall(json.decode, line:match("^%s*(.-)%s*$"))
+            if ok_j and type(obj) == "table" and obj.pkg_name then
+                registered = true
+                break
+            end
+        end
+        if registered then
+            local ok_pre, pre_ls = pcall(cmd.exec, "ls " .. bin_path)
+            if not ok_pre or pre_ls:match("^%s*$") then
+                log.warn("Removing stale soar registration of '" .. tool .. "' (binary missing from " .. bin_path .. ")")
+                pcall(cmd.exec, "soar remove " .. tool)
+            end
+        end
+    end
 
     -- Key flags:
     --   --yes           skip interactive prompts (pick first variant)
@@ -78,10 +101,41 @@ function PLUGIN:BackendInstall(ctx)
     -- Sanity check: at least one executable should now exist in bin_path.
     local ok_ls, ls_out = pcall(cmd.exec, "ls " .. bin_path)
     if not ok_ls or ls_out:match("^%s*$") then
+        -- Distinguish "package not in registry" from other install failures.
+        -- soar exits 0 even when the package is not found, so we must check.
+        pcall(cmd.exec, "soar sync")
+        local ok_search, search_raw = pcall(cmd.exec, "soar --json search --exact " .. tool)
+        local found = false
+        if ok_search and search_raw and search_raw ~= "" then
+            for line in search_raw:gmatch("[^\n]+") do
+                local ok2, obj = pcall(json.decode, line:match("^%s*(.-)%s*$"))
+                if ok2 and type(obj) == "table" and obj.pkg_name then
+                    found = true
+                    break
+                end
+            end
+        end
+
+        if not found then
+            error(
+                "Package '"
+                    .. tool
+                    .. "' was not found in the soar registry.\n\n"
+                    .. "Search for available packages:\n"
+                    .. "  https://pkgs.pkgforge.dev/?search="
+                    .. tool
+                    .. "\n  soar search "
+                    .. tool
+            )
+        end
+
         error(
-            "Installation appeared to succeed but no files were found in "
+            "Installation of '"
+                .. tool
+                .. "' appeared to succeed but no files were found in "
                 .. bin_path
-                .. ".\n\nCheck soar output above for errors."
+                .. ".\n\nTry running manually: soar install "
+                .. tool
         )
     end
 
